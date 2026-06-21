@@ -1,0 +1,3 @@
+match_date,team_1,team_2,stage,predicted_winner,predicted_score,predicted_goal_difference,confidence,team_1_win_probability,draw_probability,team_2_win_probability,expected_goals_team_1,expected_goals_team_2,expected_competition_points,prediction_method,explanation
+
+2026-06-21,Spain,Saudi Arabia,Group Stage,Spain,1-0,1,69.75,0.6975,0.2246,0.0779,2.1637,0.6694,3.226,CatBoost Outcome Model + Rating-Based Poisson Goal Model + Candidate Expected-Points Optimizer,"Spain selected because its candidate scoreline maximized expected competition points. CatBoost outcome probabilities were Spain 69.8%, draw 22.5%, Saudi Arabia 7.8%. Poisson expected goals were Spain 2.16 and Saudi Arabia 0.67. Elo diff 531.0, FIFA points diff 421.0."
