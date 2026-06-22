@@ -20,7 +20,7 @@ worldcup_prediction_project/
     outputs/
     README.md
 
-  version_2_ml/
+  core_prediction/
     scripts/
     notebooks/
     models/
@@ -53,7 +53,7 @@ Important note: Version 1 also keeps local `data/`, `cleaned_data/`, and `proces
 
 ## Version 2 Machine Learning
 
-`version_2_ml/` contains the ML workspace:
+`core_prediction/` contains the ML workspace:
 
 - `scripts/`: ML scripts.
 - `notebooks/`: Version-specific ML notebooks.
