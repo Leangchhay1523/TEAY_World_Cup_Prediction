@@ -1,7 +1,26 @@
-import requests
+from pathlib import Path
+
 import pandas as pd
+import requests
 
 from src.data.base import BaseDataPipeline
+from src.data.shared import standardize_team_name
+
+
+def load_fifa_csv(path: Path) -> pd.DataFrame:
+    if not path.exists():
+        raise FileNotFoundError(f"FIFA ranking file not found: {path}")
+    fifa = pd.read_csv(path)
+    required = {"team", "rank", "points", "confederation"}
+    missing = required.difference(fifa.columns)
+    if missing:
+        raise ValueError(f"FIFA file missing columns: {sorted(missing)}")
+
+    fifa = fifa.copy()
+    fifa["team_key"] = fifa["team"].map(standardize_team_name)
+    for column in ["rank", "points"]:
+        fifa[column] = pd.to_numeric(fifa[column], errors="coerce")
+    return fifa
 
 
 class FifaRankings(BaseDataPipeline):

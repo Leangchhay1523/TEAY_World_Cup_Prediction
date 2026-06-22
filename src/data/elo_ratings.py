@@ -1,7 +1,28 @@
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 
 from src.data.base import BaseDataPipeline
+from src.data.shared import standardize_team_name
+
+
+def load_elo_csv(path: Path) -> pd.DataFrame:
+    if not path.exists():
+        raise FileNotFoundError(f"Elo file not found: {path}")
+    elo = pd.read_csv(path)
+    required = {"team_name", "elo", "matches", "goals_for", "goals_against", "recent_form"}
+    missing = required.difference(elo.columns)
+    if missing:
+        raise ValueError(f"Elo file missing columns: {sorted(missing)}")
+
+    elo = elo.copy()
+    elo["team_key"] = elo["team_name"].map(standardize_team_name)
+    for column in ["elo", "matches", "goals_for", "goals_against", "recent_form"]:
+        elo[column] = pd.to_numeric(elo[column], errors="coerce")
+    elo["goal_rate"] = np.where(elo["matches"] > 0, elo["goals_for"] / elo["matches"], np.nan)
+    elo["concede_rate"] = np.where(elo["matches"] > 0, elo["goals_against"] / elo["matches"], np.nan)
+    return elo
 
 
 class EloRatings(BaseDataPipeline):

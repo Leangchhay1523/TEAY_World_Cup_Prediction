@@ -1,21 +1,9 @@
-"""Train the simplified Version 2 outcome model.
-
-Active Version 2 architecture:
-- CatBoostClassifier predicts match outcome only.
-- Expected goals are not learned by CatBoost anymore.
-- The prediction script estimates expected goals with rating/statistical logic
-  and uses a Poisson score matrix.
-
-The dataset builder remains leakage-aware. It computes pre-match rolling team
-features from historical results before each match is added to team history.
-"""
-
 from __future__ import annotations
 
 import argparse
 import json
 import math
-import unicodedata
+import sys
 from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -27,23 +15,24 @@ from sklearn.metrics import accuracy_score, log_loss
 
 try:
     from catboost import CatBoostClassifier, Pool
-except ImportError as exc:  # pragma: no cover - handled when training starts.
+except ImportError as exc:
     CatBoostClassifier = None
     Pool = None
     CATBOOST_IMPORT_ERROR = exc
 else:
     CATBOOST_IMPORT_ERROR = None
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from src.data import load_results, load_fifa_csv
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-VERSION_DIR = PROJECT_ROOT / "version_2_ml"
+VERSION_DIR = PROJECT_ROOT / "CatBoostClassification" / "version_2_ml"
 
 DEFAULT_RESULTS_PATHS = [
     PROJECT_ROOT / "data" / "raw" / "results.csv",
-    PROJECT_ROOT / "version_1_baseline" / "data" / "results.csv",
 ]
 DEFAULT_FIFA_PATHS = [
-    PROJECT_ROOT / "data" / "live_updates" / "fifa_rankings.csv",
     PROJECT_ROOT / "data" / "raw" / "fifa_rankings.csv",
 ]
 
@@ -55,24 +44,9 @@ OUTCOME_MODEL_PATH = VERSION_DIR / "models" / "catboost_outcome_model.cbm"
 
 OUTCOME_LABELS = ["team_1_win", "draw", "team_2_win"]
 
-TEAM_ALIASES = {
-    "USA": "United States",
-    "US": "United States",
-    "United States of America": "United States",
-    "Korea Republic": "South Korea",
-    "Republic of Korea": "South Korea",
-    "South Korea": "South Korea",
-    "Cote d'Ivoire": "Cote d'Ivoire",
-    "Cote d Ivoire": "Cote d'Ivoire",
-    "Czech Republic": "Czechia",
-    "Turkiye": "Turkey",
-}
-
 
 @dataclass
 class RollingTeamState:
-    """Pre-match state built only from previous matches."""
-
     elo: float = 1500.0
     matches: int = 0
     goals_for: int = 0
@@ -80,20 +54,7 @@ class RollingTeamState:
     recent_points: deque[float] = field(default_factory=lambda: deque(maxlen=5))
 
 
-def standardize_team_name(value: Any) -> str:
-    """Normalize common team-name spelling differences."""
-
-    if pd.isna(value):
-        return ""
-    text = str(value).strip()
-    text = unicodedata.normalize("NFKC", text)
-    text = " ".join(text.replace("-", " ").split())
-    return TEAM_ALIASES.get(text, text)
-
-
 def find_existing_path(candidates: list[Path], label: str, required: bool = True) -> Path | None:
-    """Return the first existing path from accepted locations."""
-
     for path in candidates:
         if path.exists():
             return path
@@ -103,66 +64,33 @@ def find_existing_path(candidates: list[Path], label: str, required: bool = True
     return None
 
 
-def load_results(path: Path) -> pd.DataFrame:
-    """Load historical match results."""
-
-    results = pd.read_csv(path)
-    required = {"date", "home_team", "away_team", "home_score", "away_score", "tournament", "neutral"}
-    missing = required.difference(results.columns)
-    if missing:
-        raise ValueError(f"Historical results missing columns: {sorted(missing)}")
-
-    results = results.copy()
-    results["date"] = pd.to_datetime(results["date"], errors="coerce")
-    results["home_score"] = pd.to_numeric(results["home_score"], errors="coerce")
-    results["away_score"] = pd.to_numeric(results["away_score"], errors="coerce")
-    results["home_team"] = results["home_team"].map(standardize_team_name)
-    results["away_team"] = results["away_team"].map(standardize_team_name)
-    results["neutral"] = results["neutral"].astype(str).str.lower().isin(["true", "1", "yes"])
-
-    results = results.dropna(subset=["date", "home_score", "away_score"])
-    results = results[results["home_team"].ne("") & results["away_team"].ne("")]
-    return results.sort_values(["date", "home_team", "away_team"]).reset_index(drop=True)
-
-
 def load_latest_fifa(path: Path | None) -> pd.DataFrame:
-    """Load latest FIFA rankings for optional experimental features."""
-
     if path is None:
         return pd.DataFrame()
-    fifa = pd.read_csv(path)
-    if "team" not in fifa.columns:
+    try:
+        fifa = load_fifa_csv(path)
+    except (FileNotFoundError, ValueError):
         return pd.DataFrame()
-    fifa = fifa.copy()
-    fifa["team_key"] = fifa["team"].map(standardize_team_name)
     return fifa
 
 
 def safe_rate(numerator: float, denominator: float) -> float:
-    """Return a rate, using NaN when no previous matches exist."""
-
     if denominator <= 0:
         return np.nan
     return numerator / denominator
 
 
 def expected_score(rating_a: float, rating_b: float) -> float:
-    """Elo expected result for team A."""
-
     return 1.0 / (1.0 + math.pow(10.0, (rating_b - rating_a) / 400.0))
 
 
 def update_elo(rating_a: float, rating_b: float, score_a: float, k_factor: float = 20.0) -> tuple[float, float]:
-    """Update two rolling Elo ratings."""
-
     expected_a = expected_score(rating_a, rating_b)
     change = k_factor * (score_a - expected_a)
     return rating_a + change, rating_b - change
 
 
 def outcome_label(goals_1: int, goals_2: int) -> str:
-    """Convert a scoreline into a classifier target."""
-
     if goals_1 > goals_2:
         return "team_1_win"
     if goals_1 < goals_2:
@@ -171,8 +99,6 @@ def outcome_label(goals_1: int, goals_2: int) -> str:
 
 
 def get_fifa_feature(fifa: pd.DataFrame, team: str, column: str) -> Any:
-    """Read a latest FIFA feature. Disabled by default to avoid leakage."""
-
     if fifa.empty or column not in fifa.columns:
         return np.nan
     match = fifa[fifa["team_key"].eq(team)]
@@ -186,8 +112,6 @@ def build_training_dataset(
     fifa_table: pd.DataFrame | None = None,
     allow_latest_rating_features: bool = False,
 ) -> pd.DataFrame:
-    """Build one row per historical match with pre-match features."""
-
     fifa_table = fifa_table if fifa_table is not None else pd.DataFrame()
     states: dict[str, RollingTeamState] = {}
     rows: list[dict[str, Any]] = []
@@ -286,8 +210,6 @@ def build_training_dataset(
 
 
 def model_features(dataset: pd.DataFrame) -> tuple[list[str], list[str]]:
-    """Return active classifier features and categorical feature names."""
-
     features = [
         "team_1_elo",
         "team_2_elo",
@@ -320,8 +242,6 @@ def model_features(dataset: pd.DataFrame) -> tuple[list[str], list[str]]:
 
 
 def time_aware_split(dataset: pd.DataFrame, train_fraction: float = 0.8) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Train on older matches and validate on newer matches."""
-
     if not 0.5 <= train_fraction < 1.0:
         raise ValueError("train_fraction must be between 0.5 and 1.0")
     dataset = dataset.sort_values(["date", "team_1", "team_2"]).reset_index(drop=True)
@@ -335,8 +255,6 @@ def train_models(
     random_seed: int = 42,
     iterations: int = 500,
 ) -> dict[str, Any]:
-    """Train only the CatBoost outcome classifier."""
-
     if CATBOOST_IMPORT_ERROR is not None:
         raise RuntimeError(
             "CatBoost is required for Version 2 training. "
@@ -396,8 +314,6 @@ def train_models(
 
 
 def save_training_outputs(dataset: pd.DataFrame, training_result: dict[str, Any], allow_latest: bool) -> None:
-    """Save dataset, classifier, feature importance, and report."""
-
     VERSION_DIR.joinpath("models").mkdir(parents=True, exist_ok=True)
     VERSION_DIR.joinpath("processed_data").mkdir(parents=True, exist_ok=True)
     VERSION_DIR.joinpath("outputs").mkdir(parents=True, exist_ok=True)
@@ -465,8 +381,6 @@ def save_training_outputs(dataset: pd.DataFrame, training_result: dict[str, Any]
 
 
 def parse_args() -> argparse.Namespace:
-    """Parse command-line arguments."""
-
     parser = argparse.ArgumentParser(description="Train simplified Version 2 CatBoost outcome model.")
     parser.add_argument("--results-path", type=Path, default=None, help="Historical results CSV.")
     parser.add_argument("--fifa-path", type=Path, default=None, help="Latest FIFA ranking CSV.")
@@ -482,8 +396,6 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
-    """Run training end to end."""
-
     args = parse_args()
     results_path = args.results_path or find_existing_path(DEFAULT_RESULTS_PATHS, "historical results")
     fifa_path = args.fifa_path or find_existing_path(DEFAULT_FIFA_PATHS, "latest FIFA rankings", required=False)
