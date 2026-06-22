@@ -9,7 +9,7 @@ This repository contains the FIFA World Cup 2026 prediction project, organized i
 - `shared/`: Reusable project code for future versions.
 - `tests/`: Future automated tests.
 - `version_1_baseline/`: Baseline prediction system.
-- `version_2_ml/`: Machine learning workspace.
+- `core_prediction/`: Machine learning workspace.
 - `_archive/`: Preserved old logs and presentation material.
 
 ## Version 1: Baseline
@@ -20,7 +20,7 @@ The Version 1 logic was not changed. Its local data folders remain in place so t
 
 ## Version 2: Machine Learning
 
-`version_2_ml/` is reserved for ML experiments, feature documentation, notebooks, trained models, processed ML datasets, and generated ML outputs.
+`core_prediction/` is reserved for ML experiments, feature documentation, notebooks, trained models, processed ML datasets, and generated ML outputs.
 
 Current Version 2 research inputs:
 
@@ -31,8 +31,8 @@ Current Version 2 research inputs:
 
 Current Version 2 report:
 
-- `version_2_ml/reports/DATA_FEATURE.md`
-- `version_2_ml/reports/training_report_v2.md`
+- `core_prediction/reports/DATA_FEATURE.md`
+- `core_prediction/reports/training_report_v2.md`
 
 ## Documentation
 
