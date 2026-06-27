@@ -1,0 +1,14 @@
+{
+  "decision_rule": "highest_adjusted_score_probability",
+  "goal_scale": 1.0,
+  "selection_metric": "exact_score_accuracy",
+  "exact_score_accuracy": 0.1381785100576165,
+  "goal_difference_accuracy": 0.2576569291418174,
+  "winner_accuracy_from_score": 0.5502880824825634,
+  "avg_absolute_goal_error": 1.8209845345193572,
+  "predicted_avg_total_goals": 1.7559890831901344,
+  "actual_avg_total_goals": 2.7331446477307186,
+  "draw_prediction_rate": 0.3096128575760639,
+  "home_win_prediction_rate": 0.4598200748003639,
+  "away_win_prediction_rate": 0.23056706762357224
+}

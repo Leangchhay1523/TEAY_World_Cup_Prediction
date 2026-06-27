@@ -39,3 +39,8 @@ match_id,date,team_1,team_2,stage,group,host_city,host_country,stadium,venue,kic
 38,2026-06-21,Belgium,Iran,Group Stage,Group G,Los Angeles,USA,SoFi Stadium,"SoFi Stadium, Los Angeles, USA",15:00:00
 39,2026-06-21,Uruguay,Cabo Verde,Group Stage,Group H,Miami,USA,Hard Rock Stadium,"Hard Rock Stadium, Miami, USA",18:00:00
 40,2026-06-21,New Zealand,Egypt,Group Stage,Group G,Vancouver,Canada,BC Place,"BC Place, Vancouver, Canada",21:00:00
+41,2026-06-22,Argentina,Austria,Group Stage,Group J,Dallas,USA,AT&T Stadium,"AT&T Stadium, Dallas, USA",13:00:00
+42,2026-06-22,France,Winner FIFA Playoff 2,Group Stage,Group I,Philadelphia,USA,Lincoln Financial Field,"Lincoln Financial Field, Philadelphia, USA",17:00:00
+43,2026-06-22,Norway,Senegal,Group Stage,Group I,New York/New Jersey,USA,MetLife Stadium,"MetLife Stadium, New York/New Jersey, USA",20:00:00
+44,2026-06-22,Jordan,Algeria,Group Stage,Group J,San Francisco Bay Area,USA,Levi's Stadium,"Levi's Stadium, San Francisco Bay Area, USA",23:00:00
+45,2026-06-23,Portugal,Uzbekistan,Group Stage,Group K,Houston,USA,NRG Stadium,"NRG Stadium, Houston, USA",13:00:00

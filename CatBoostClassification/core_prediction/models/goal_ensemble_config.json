@@ -1,0 +1,11 @@
+{
+  "best_catboost_weight": 0.6,
+  "best_statistical_weight": 0.4,
+  "selection_metric": "average_competition_points",
+  "validation_exact_score_accuracy": 0.14222177297078742,
+  "validation_goal_difference_accuracy": 0.2583645001516224,
+  "validation_winner_accuracy_from_score": 0.6007277873243708,
+  "validation_avg_competition_points": 3.030021227130294,
+  "validation_goals_team_1_mae": 1.0174601811103647,
+  "validation_goals_team_2_mae": 0.8556067228986679
+}

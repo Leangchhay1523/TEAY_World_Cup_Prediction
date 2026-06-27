@@ -1,10 +1,11 @@
-"""Predict one FIFA World Cup 2026 match with simplified Version 2.
+"""Predict one FIFA World Cup 2026 match with Version 2.
 
 Active architecture:
 - CatBoostClassifier predicts outcome probabilities.
-- Rating/statistical logic estimates expected goals.
+- CatBoostRegressor goal models estimate expected goals.
+- Statistical xG and goal-scale calibration stabilize Poisson lambdas.
 - Poisson matrix generates exact-score and goal-difference probabilities.
-- Candidate optimizer selects the scoreline with best expected competition points.
+- Default decision mode selects the highest expected competition points.
 """
 
 from __future__ import annotations
@@ -12,11 +13,10 @@ from __future__ import annotations
 import argparse
 import csv
 import difflib
-import math
+import json
 import re
 import sys
 from dataclasses import dataclass
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -27,19 +27,28 @@ from v25_feature_engineering import (
     MODEL_FEATURE_COLUMNS,
     VERSION_2_5_FEATURE_COLUMNS,
     RollingTeamState,
+    build_fifa_feature_pair,
     build_form_feature_pair,
-    build_states_before_date,
+    build_historical_context_before_date,
+    calibrate_expected_goals,
+    clamp_expected_goals,
+    estimate_statistical_expected_goals,
+    generate_candidates as shared_generate_candidates,
+    generate_score_matrix as shared_generate_score_matrix,
     get_tournament_importance_weight,
     get_tournament_type_group,
     load_results,
     normalize_team_name as shared_normalize_team_name,
+    poisson_pmf as shared_poisson_pmf,
+    safe_ratio,
     safe_rate,
+    score_winner as shared_score_winner,
     standardize_team_name as shared_standardize_team_name,
 )
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-VERSION_DIR = PROJECT_ROOT / "core_prediction"
+VERSION_DIR = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = VERSION_DIR.parent
 DATA_ROOT = PROJECT_ROOT.parent / "data"
 
 FIXTURE_PATH = DATA_ROOT / "worldcup_2026_fixtures" / "worldcup_2026_fixtures_cleaned.csv"
@@ -48,12 +57,15 @@ RESULTS_PATH = DATA_ROOT / "raw" / "results.csv"
 ELO_PATH = DATA_ROOT / "raw" / "elo_ratings.csv"
 FIFA_PATH = DATA_ROOT / "raw" / "fifa_rankings.csv"
 OUTCOME_MODEL_PATH = VERSION_DIR / "models" / "catboost_outcome_model.cbm"
+GOALS_TEAM_1_MODEL_PATH = VERSION_DIR / "models" / "catboost_goals_team_1.cbm"
+GOALS_TEAM_2_MODEL_PATH = VERSION_DIR / "models" / "catboost_goals_team_2.cbm"
+GOAL_ENSEMBLE_CONFIG_PATH = VERSION_DIR / "models" / "goal_ensemble_config.json"
+SCORE_SELECTION_CONFIG_PATH = VERSION_DIR / "models" / "score_selection_config.json"
 PREDICTION_OUTPUT_PATH = VERSION_DIR / "outputs" / "version_2_predictions.csv"
+TRAINING_METRICS_PATH = VERSION_DIR / "outputs" / "training_metrics_v2.json"
 
-PREDICTION_METHOD = (
-    "CatBoost Outcome Model + Version 2 Form Features + Rating-Based Poisson Goal Model + "
-    "Candidate Expected-Points Optimizer"
-)
+PREDICTION_METHOD = "CatBoostClassifier + CatBoostRegressor/Statistical xG Ensemble + Expected-Points Score Selection"
+DECISION_MODES = ["score_probability", "expected_points"]
 OUTCOME_LABELS = ["team_1_win", "draw", "team_2_win"]
 FIXTURE_COLUMNS = [
     "match_id",
@@ -113,6 +125,8 @@ PLACEHOLDER_PATTERNS = [
     r".*\bGroup [A-L]\b.*",
 ]
 
+_TRAINING_METADATA_CACHE: dict[str, Any] | None = None
+
 
 @dataclass(frozen=True)
 class FixtureMatch:
@@ -139,27 +153,61 @@ class PredictionResult:
     predicted_score: str
     predicted_goal_difference: int
     confidence: float
+    outcome_confidence: float
+    exact_score_confidence: float
+    confidence_type: str
     team_1_win_probability: float
     draw_probability: float
     team_2_win_probability: float
     expected_goals_team_1: float
     expected_goals_team_2: float
+    catboost_xg_team_1: float
+    catboost_xg_team_2: float
+    statistical_xg_team_1: float
+    statistical_xg_team_2: float
+    ensemble_xg_team_1: float
+    ensemble_xg_team_2: float
+    goal_ensemble_weight_catboost: float
+    goal_ensemble_weight_statistical: float
+    decision_mode: str
+    goal_scale: float
+    calibrated_xg_team_1: float
+    calibrated_xg_team_2: float
+    selected_score_probability: float
+    predicted_total_goals: int
     expected_competition_points: float
     prediction_method: str
     explanation: str
 
 
-def import_catboost_classifier() -> Any:
-    """Import CatBoost only when model inference is needed."""
+@dataclass(frozen=True)
+class ExpectedGoalsBreakdown:
+    """CatBoost, statistical, and final ensemble expected goals."""
+
+    catboost_xg_team_1: float
+    catboost_xg_team_2: float
+    statistical_xg_team_1: float
+    statistical_xg_team_2: float
+    ensemble_xg_team_1: float
+    ensemble_xg_team_2: float
+    calibrated_xg_team_1: float
+    calibrated_xg_team_2: float
+    catboost_weight: float
+    statistical_weight: float
+    goal_scale: float
+
+
+def import_catboost_models() -> tuple[Any, Any]:
+    """Import CatBoost classes only when model inference is needed."""
 
     try:
-        from catboost import CatBoostClassifier
+        from catboost import CatBoostClassifier, CatBoostRegressor
     except ImportError as exc:
         raise RuntimeError(
             "CatBoost is required for Version 2 predictions. "
             "Install dependencies with: python -m pip install -r requirements.txt"
         ) from exc
-    return CatBoostClassifier
+    return CatBoostClassifier, CatBoostRegressor
 
 
 def normalize_team_name(value: Any) -> str:
@@ -183,6 +231,83 @@ def display_team_name(team_name: str) -> str:
     """Convert internal canonical names into user-facing display names."""
 
     return DISPLAY_TEAM_NAMES.get(team_name, team_name)
+
+
+def load_training_metadata() -> dict[str, Any]:
+    """Load the saved training feature contract when it is available."""
+
+    global _TRAINING_METADATA_CACHE
+    if _TRAINING_METADATA_CACHE is not None:
+        return _TRAINING_METADATA_CACHE
+    if not TRAINING_METRICS_PATH.exists():
+        _TRAINING_METADATA_CACHE = {}
+        return _TRAINING_METADATA_CACHE
+    with TRAINING_METRICS_PATH.open("r", encoding="utf-8") as metrics_file:
+        _TRAINING_METADATA_CACHE = json.load(metrics_file)
+    return _TRAINING_METADATA_CACHE
+
+
+def training_feature_columns() -> list[str]:
+    """Return the exact feature names and order saved by training."""
+
+    metadata = load_training_metadata()
+    features = metadata.get("features")
+    if isinstance(features, list) and features:
+        return [str(feature) for feature in features]
+    return MODEL_FEATURE_COLUMNS.copy()
+
+
+def training_uses_latest_rating_features() -> bool:
+    """Return whether the saved model was trained with current FIFA snapshots."""
+
+    metadata = load_training_metadata()
+    return bool(metadata.get("allow_latest_rating_features", False))
+
+
+def load_goal_ensemble_config() -> dict[str, float]:
+    """Load the saved CatBoost/statistical xG ensemble weights."""
+
+    if GOAL_ENSEMBLE_CONFIG_PATH.exists():
+        with GOAL_ENSEMBLE_CONFIG_PATH.open("r", encoding="utf-8") as config_file:
+            config = json.load(config_file)
+    else:
+        # Keeps the CLI usable before the next training run; training writes the tuned config.
+        config = {
+            "best_catboost_weight": 1.0,
+            "best_statistical_weight": 0.0,
+            "selection_metric": "fallback_catboost_only",
+        }
+
+    catboost_weight = float(config.get("best_catboost_weight", 1.0))
+    catboost_weight = max(0.0, min(1.0, catboost_weight))
+    statistical_weight = float(config.get("best_statistical_weight", 1.0 - catboost_weight))
+    statistical_weight = max(0.0, min(1.0, statistical_weight))
+    if abs((catboost_weight + statistical_weight) - 1.0) > 1e-6:
+        statistical_weight = 1.0 - catboost_weight
+    return {
+        **config,
+        "best_catboost_weight": catboost_weight,
+        "best_statistical_weight": statistical_weight,
+    }
+
+
+def load_score_selection_config() -> dict[str, float | str]:
+    """Load the saved score-probability goal-scale calibration."""
+
+    if SCORE_SELECTION_CONFIG_PATH.exists():
+        with SCORE_SELECTION_CONFIG_PATH.open("r", encoding="utf-8") as config_file:
+            config = json.load(config_file)
+    else:
+        config = {
+            "decision_rule": "highest_adjusted_score_probability",
+            "goal_scale": 1.0,
+            "selection_metric": "fallback_unscaled_score_probability",
+        }
+    goal_scale = max(0.1, min(2.0, float(config.get("goal_scale", 1.0))))
+    return {
+        **config,
+        "goal_scale": goal_scale,
+    }
 
 
 def is_unresolved_placeholder(team_name: str) -> bool:
@@ -264,7 +389,9 @@ def load_fifa(path: Path = FIFA_PATH) -> pd.DataFrame:
 
     fifa = fifa.copy()
     fifa["team_key"] = fifa["team"].map(standardize_team_name)
-    for column in ["rank", "points"]:
+    for column in ["rank", "previous_rank", "ranking_move", "points", "previous_points", "rated_matches"]:
+        if column not in fifa.columns:
+            fifa[column] = np.nan
         fifa[column] = pd.to_numeric(fifa[column], errors="coerce")
     return fifa
 
@@ -401,18 +528,24 @@ def build_feature_row(
     elo: pd.DataFrame,
     fifa: pd.DataFrame,
     results: pd.DataFrame | None = None,
+    allow_latest_rating_features: bool | None = None,
 ) -> pd.DataFrame:
-    """Build the classifier feature row from latest ratings and V2 form."""
+    """Build the shared model feature row from the saved training contract."""
 
     elo_1 = get_single_team_row(elo, fixture.team_1, "Elo")
     elo_2 = get_single_team_row(elo, fixture.team_2, "Elo")
     fifa_1 = get_single_team_row(fifa, fixture.team_1, "FIFA ranking")
     fifa_2 = get_single_team_row(fifa, fixture.team_2, "FIFA ranking")
+    use_latest_ratings = (
+        training_uses_latest_rating_features()
+        if allow_latest_rating_features is None
+        else allow_latest_rating_features
+    )
     historical_results = results if results is not None else load_results(RESULTS_PATH)
-    states = build_states_before_date(historical_results, fixture.match_date)
+    states, h2h_history = build_historical_context_before_date(historical_results, fixture.match_date)
     state_1 = states.get(fixture.team_1, RollingTeamState())
     state_2 = states.get(fixture.team_2, RollingTeamState())
-    form_features = build_form_feature_pair(state_1, state_2)
+    form_features = build_form_feature_pair(state_1, state_2, fixture.team_1, fixture.team_2, h2h_history)
 
     team_1_goal_rate = _fallback_rate(safe_rate(state_1.goals_for, state_1.matches), elo_1["goal_rate"])
     team_2_goal_rate = _fallback_rate(safe_rate(state_2.goals_for, state_2.matches), elo_2["goal_rate"])
@@ -425,12 +558,7 @@ def build_feature_row(
         "team_1_elo": float(elo_1["elo"]),
         "team_2_elo": float(elo_2["elo"]),
         "elo_diff": float(elo_1["elo"] - elo_2["elo"]),
-        "team_1_fifa_rank": float(fifa_1["rank"]),
-        "team_2_fifa_rank": float(fifa_2["rank"]),
-        "fifa_rank_diff": float(fifa_1["rank"] - fifa_2["rank"]),
-        "team_1_fifa_points": float(fifa_1["points"]),
-        "team_2_fifa_points": float(fifa_2["points"]),
-        "fifa_points_diff": float(fifa_1["points"] - fifa_2["points"]),
+        "elo_ratio": safe_ratio(elo_1["elo"], elo_2["elo"]),
         "team_1_recent_form": form_features["team_1_form_points_last_5"],
         "team_2_recent_form": form_features["team_2_form_points_last_5"],
         "recent_form_diff": form_features["form_points_diff_last_5"],
@@ -445,34 +573,65 @@ def build_feature_row(
         "tournament_importance_weight": get_tournament_importance_weight(tournament_type_group),
         "neutral": infer_neutral_flag(fixture.team_1, fixture.team_2, fixture.host_country),
         "year": int(pd.to_datetime(fixture.match_date).year),
-        "team_1_confederation": str(fifa_1["confederation"]),
-        "team_2_confederation": str(fifa_2["confederation"]),
     }
+    row.update(build_fifa_feature_pair(fifa_1, fifa_2, enabled=use_latest_ratings))
     row.update(form_features)
     return pd.DataFrame([row])
 
 
 def model_feature_columns() -> list[str]:
-    """Feature order used by the outcome classifier."""
+    """Feature order used by the outcome classifier and goal regressors."""
 
-    return MODEL_FEATURE_COLUMNS
+    return training_feature_columns()
 
 
-def load_outcome_model() -> Any:
-    """Load only the active CatBoost outcome classifier."""
+def aligned_model_input(feature_row: pd.DataFrame) -> pd.DataFrame:
+    """Validate and order features exactly as they were used during training."""
+
+    features = model_feature_columns()
+    missing = [feature for feature in features if feature not in feature_row.columns]
+    if missing:
+        raise ValueError(f"Feature row is missing trained model columns: {missing}")
+    return feature_row[features]
+
+
+def load_prediction_models() -> tuple[Any, Any, Any]:
+    """Load the outcome classifier and both goal regressors."""
 
     if not OUTCOME_MODEL_PATH.exists():
         raise FileNotFoundError(f"Required outcome model not found: {OUTCOME_MODEL_PATH}")
-    CatBoostClassifier = import_catboost_classifier()
-    model = CatBoostClassifier()
-    model.load_model(OUTCOME_MODEL_PATH)
-    return model
+    if not GOALS_TEAM_1_MODEL_PATH.exists():
+        raise FileNotFoundError(f"Required team 1 goal model not found: {GOALS_TEAM_1_MODEL_PATH}")
+    if not GOALS_TEAM_2_MODEL_PATH.exists():
+        raise FileNotFoundError(f"Required team 2 goal model not found: {GOALS_TEAM_2_MODEL_PATH}")
+
+    CatBoostClassifier, CatBoostRegressor = import_catboost_models()
+    outcome_model = CatBoostClassifier()
+    goals_team_1_model = CatBoostRegressor()
+    goals_team_2_model = CatBoostRegressor()
+    outcome_model.load_model(OUTCOME_MODEL_PATH)
+    goals_team_1_model.load_model(GOALS_TEAM_1_MODEL_PATH)
+    goals_team_2_model.load_model(GOALS_TEAM_2_MODEL_PATH)
+    validate_model_feature_contract(outcome_model, goals_team_1_model, goals_team_2_model)
+    return outcome_model, goals_team_1_model, goals_team_2_model
+
+
+def validate_model_feature_contract(*models: Any) -> None:
+    """Ensure all loaded CatBoost models share the saved training feature order."""
+
+    expected_features = model_feature_columns()
+    for model in models:
+        model_features = list(getattr(model, "feature_names_", []) or [])
+        if model_features and model_features != expected_features:
+            raise ValueError(
+                "Loaded model feature names do not match the saved Version 2 training contract."
+            )
 
 
 def predict_outcome_probabilities(model: Any, feature_row: pd.DataFrame) -> dict[str, float]:
     """Return P(team_1_win), P(draw), and P(team_2_win)."""
 
-    probabilities = model.predict_proba(feature_row[model_feature_columns()])[0]
+    probabilities = model.predict_proba(aligned_model_input(feature_row))[0]
     classes = getattr(model, "classes_", OUTCOME_LABELS)
     labels = [str(label) for label in classes]
     probability_map = {label: float(prob) for label, prob in zip(labels, probabilities)}
@@ -481,147 +640,116 @@ def predict_outcome_probabilities(model: Any, feature_row: pd.DataFrame) -> dict
     return {label: probability_map[label] for label in OUTCOME_LABELS}
 
 
-def clamp(value: float, lower: float = 0.2, upper: float = 4.5) -> float:
+def clamp(value: float, lower: float = 0.05, upper: float = 5.0) -> float:
     """Keep expected goals football-realistic."""
 
-    return max(lower, min(upper, value))
+    return clamp_expected_goals(value, lower=lower, upper=upper)
 
 
-def zero_if_nan(value: float) -> float:
-    """Return zero for missing numeric feature values."""
+def predict_catboost_expected_goals(
+    goals_team_1_model: Any,
+    goals_team_2_model: Any,
+    feature_row: pd.DataFrame,
+) -> tuple[float, float]:
+    """Predict and clamp CatBoost goal-model expected goals."""
 
-    return 0.0 if pd.isna(value) else float(value)
+    model_input = aligned_model_input(feature_row)
+    expected_goals_1 = clamp_expected_goals(float(goals_team_1_model.predict(model_input)[0]))
+    expected_goals_2 = clamp_expected_goals(float(goals_team_2_model.predict(model_input)[0]))
+    return round(expected_goals_1, 4), round(expected_goals_2, 4)
 
 
-def estimate_expected_goals(feature_row: pd.DataFrame) -> tuple[float, float]:
-    """Estimate expected goals without CatBoostRegressor.
+def predict_expected_goals(
+    goals_team_1_model: Any,
+    goals_team_2_model: Any,
+    feature_row: pd.DataFrame,
+) -> tuple[float, float]:
+    """Backward-compatible wrapper for CatBoost goal-model predictions."""
 
-    The logic blends team attacking rate, opponent concede rate, Version 2
-    recent goal form, Elo strength, FIFA points strength, points form, and
-    recent opponent strength. Both teams retain a minimum scoring expectation
-    so weaker teams do not collapse to zero.
-    """
+    return predict_catboost_expected_goals(goals_team_1_model, goals_team_2_model, feature_row)
 
-    row = feature_row.iloc[0]
-    base_1 = np.nanmean(
-        [
-            row["team_1_goal_rate"],
-            row["team_2_concede_rate"],
-            row["team_1_avg_goals_scored_last_10"],
-            row["team_2_avg_goals_conceded_last_10"],
-        ]
+
+def predict_ensemble_expected_goals(
+    goals_team_1_model: Any,
+    goals_team_2_model: Any,
+    feature_row: pd.DataFrame,
+    ensemble_config: dict[str, float],
+    goal_scale: float = 1.0,
+) -> ExpectedGoalsBreakdown:
+    """Combine CatBoost xG with statistical xG, then apply goal-scale calibration."""
+
+    catboost_xg_1, catboost_xg_2 = predict_catboost_expected_goals(
+        goals_team_1_model,
+        goals_team_2_model,
+        feature_row,
     )
-    base_2 = np.nanmean(
-        [
-            row["team_2_goal_rate"],
-            row["team_1_concede_rate"],
-            row["team_2_avg_goals_scored_last_10"],
-            row["team_1_avg_goals_conceded_last_10"],
-        ]
+    statistical_xg_1, statistical_xg_2 = estimate_statistical_expected_goals(feature_row.iloc[0])
+    catboost_weight = float(ensemble_config["best_catboost_weight"])
+    statistical_weight = float(ensemble_config["best_statistical_weight"])
+    ensemble_xg_1 = clamp_expected_goals(
+        catboost_weight * catboost_xg_1 + statistical_weight * statistical_xg_1
     )
-
-    if np.isnan(base_1):
-        base_1 = 1.2
-    if np.isnan(base_2):
-        base_2 = 1.2
-
-    elo_component = zero_if_nan(row["elo_diff"]) / 400.0
-    fifa_component = zero_if_nan(row["fifa_points_diff"]) / 350.0
-    points_form_component = zero_if_nan(row["form_points_diff_last_5"]) / 15.0
-    goal_form_component = (
-        zero_if_nan(row["avg_goals_scored_diff_last_5"])
-        - zero_if_nan(row["avg_goals_conceded_diff_last_5"])
-    ) / 3.0
-    opponent_strength_component = zero_if_nan(row["avg_opponent_elo_diff_last_10"]) / 400.0
-    strength_adjustment = (
-        0.22 * elo_component
-        + 0.12 * fifa_component
-        + 0.10 * points_form_component
-        + 0.08 * goal_form_component
-        + 0.05 * opponent_strength_component
+    ensemble_xg_2 = clamp_expected_goals(
+        catboost_weight * catboost_xg_2 + statistical_weight * statistical_xg_2
     )
-
-    neutral_modifier = 0.0 if str(row["neutral"]).lower() == "true" else 0.08
-    expected_goals_1 = base_1 + strength_adjustment + neutral_modifier
-    expected_goals_2 = base_2 - strength_adjustment
-
-    # Very strong mismatches should tilt goals, but stay realistic.
-    if row["elo_diff"] > 200:
-        expected_goals_1 += 0.15
-        expected_goals_2 -= 0.08
-    elif row["elo_diff"] < -200:
-        expected_goals_1 -= 0.08
-        expected_goals_2 += 0.15
-
-    return float(round(clamp(expected_goals_1), 4)), float(round(clamp(expected_goals_2), 4))
+    calibrated_xg_1 = calibrate_expected_goals(ensemble_xg_1, goal_scale)
+    calibrated_xg_2 = calibrate_expected_goals(ensemble_xg_2, goal_scale)
+    return ExpectedGoalsBreakdown(
+        catboost_xg_team_1=round(catboost_xg_1, 4),
+        catboost_xg_team_2=round(catboost_xg_2, 4),
+        statistical_xg_team_1=round(statistical_xg_1, 4),
+        statistical_xg_team_2=round(statistical_xg_2, 4),
+        ensemble_xg_team_1=round(ensemble_xg_1, 4),
+        ensemble_xg_team_2=round(ensemble_xg_2, 4),
+        calibrated_xg_team_1=round(calibrated_xg_1, 4),
+        calibrated_xg_team_2=round(calibrated_xg_2, 4),
+        catboost_weight=round(catboost_weight, 4),
+        statistical_weight=round(statistical_weight, 4),
+        goal_scale=round(float(goal_scale), 4),
+    )
 
 
 def poisson_pmf(k: int, lam: float) -> float:
     """Poisson probability mass function."""
 
-    return math.exp(-lam) * math.pow(lam, k) / math.factorial(k)
+    return shared_poisson_pmf(k, lam)
 
 
 def score_winner(goals_1: int, goals_2: int) -> str:
     """Map a scoreline to an outcome label."""
 
-    if goals_1 > goals_2:
-        return "team_1_win"
-    if goals_1 < goals_2:
-        return "team_2_win"
-    return "draw"
+    return shared_score_winner(goals_1, goals_2)
 
 
 def generate_score_matrix(expected_goals_1: float, expected_goals_2: float, max_goals: int = 6) -> pd.DataFrame:
     """Generate normalized score probabilities from 0-0 to 6-6."""
 
-    lambda_1 = clamp(expected_goals_1)
-    lambda_2 = clamp(expected_goals_2)
-    rows = []
-    for goals_1 in range(max_goals + 1):
-        for goals_2 in range(max_goals + 1):
-            probability = poisson_pmf(goals_1, lambda_1) * poisson_pmf(goals_2, lambda_2)
-            rows.append(
-                {
-                    "goals_team_1": goals_1,
-                    "goals_team_2": goals_2,
-                    "predicted_score": f"{goals_1}-{goals_2}",
-                    "poisson_score_probability": probability,
-                    "goal_difference": goals_1 - goals_2,
-                    "winner_from_score": score_winner(goals_1, goals_2),
-                }
-            )
-    matrix = pd.DataFrame(rows)
-    matrix["poisson_score_probability"] = (
-        matrix["poisson_score_probability"] / matrix["poisson_score_probability"].sum()
-    )
-    return matrix
+    return shared_generate_score_matrix(expected_goals_1, expected_goals_2, max_goals=max_goals)
 
 
 def generate_candidates(score_matrix: pd.DataFrame, outcome_probabilities: dict[str, float]) -> pd.DataFrame:
     """Score every candidate by expected competition points."""
 
-    goal_diff_probabilities = (
-        score_matrix.groupby("goal_difference")["poisson_score_probability"].sum().to_dict()
-    )
-    candidates = score_matrix.copy()
-    candidates["outcome_probability"] = candidates["winner_from_score"].map(outcome_probabilities)
-    candidates["goal_difference_probability"] = candidates["goal_difference"].map(goal_diff_probabilities)
-    candidates["expected_competition_points"] = (
-        3.0 * candidates["outcome_probability"]
-        + 2.0 * candidates["goal_difference_probability"]
-        + 5.0 * candidates["poisson_score_probability"]
-    )
-    return candidates.sort_values(
-        ["expected_competition_points", "poisson_score_probability"],
-        ascending=[False, False],
-    ).reset_index(drop=True)
+    return shared_generate_candidates(score_matrix, outcome_probabilities)
+
+
+def select_final_candidate(candidates: pd.DataFrame, decision_mode: str) -> pd.Series:
+    """Select the final scoreline with the requested decision rule."""
+
+    if decision_mode == "score_probability":
+        return candidates.sort_values("poisson_score_probability", ascending=False).iloc[0]
+    if decision_mode == "expected_points":
+        return candidates.sort_values(
+            ["expected_competition_points", "poisson_score_probability"],
+            ascending=[False, False],
+        ).iloc[0]
+    raise ValueError(f"Unsupported decision_mode `{decision_mode}`. Choose from {DECISION_MODES}.")
 
 
 def print_top_candidates(candidates: pd.DataFrame, limit: int = 5) -> None:
-    """Print useful debugging information before final selection."""
+    """Print the expected-points ranking for debug comparison."""
 
-    print("\nTop candidate predictions:")
+    print("\nTop 5 scorelines by expected points:")
     columns = [
         "predicted_score",
         "winner_from_score",
@@ -632,6 +760,20 @@ def print_top_candidates(candidates: pd.DataFrame, limit: int = 5) -> None:
         "expected_competition_points",
     ]
     print(candidates[columns].head(limit).to_string(index=False))
+
+
+def print_top_score_probabilities(candidates: pd.DataFrame, limit: int = 5) -> None:
+    """Print the default score-probability ranking."""
+
+    print("\nTop 5 scorelines by score probability:")
+    columns = [
+        "predicted_score",
+        "winner_from_score",
+        "goal_difference",
+        "poisson_score_probability",
+    ]
+    ranked = candidates.sort_values("poisson_score_probability", ascending=False).reset_index(drop=True)
+    print(ranked[columns].head(limit).to_string(index=False))
 
 
 def print_form_features(fixture: FixtureMatch, feature_row: pd.DataFrame) -> None:
@@ -670,20 +812,70 @@ def print_final_selection(prediction: PredictionResult) -> None:
     """Print the final selected prediction for debugging."""
 
     print("\nFinal selected prediction:")
+    print(f"- Decision mode: {prediction.decision_mode}")
     print(f"- Winner: {prediction.predicted_winner}")
     print(f"- Score: {prediction.predicted_score}")
     print(f"- Goal difference: {prediction.predicted_goal_difference}")
+    print(f"- Predicted winner: {prediction.predicted_winner}")
+    print(f"- Confidence source: {prediction.confidence_type}")
+    print(f"- Outcome confidence: {prediction.outcome_confidence:.4f}")
+    print(f"- Exact score confidence: {prediction.exact_score_confidence:.4f}")
     print(f"- Confidence: {prediction.confidence:.2f}/100")
+    print(f"- Selected score probability: {prediction.selected_score_probability:.2%}")
     print(f"- Expected competition points: {prediction.expected_competition_points:.4f}")
+
+
+def print_outcome_probabilities(probabilities: dict[str, float], team_1: str, team_2: str) -> None:
+    """Print classifier probabilities in a readable debug block."""
+
+    print("\nOutcome probabilities from CatBoostClassifier:")
+    print(f"- {team_1} win: {probabilities['team_1_win']:.4f}")
+    print(f"- Draw: {probabilities['draw']:.4f}")
+    print(f"- {team_2} win: {probabilities['team_2_win']:.4f}")
+
+
+def print_expected_goals(
+    expected_goals_1: float,
+    expected_goals_2: float,
+    team_1: str,
+    team_2: str,
+) -> None:
+    """Print CatBoost-only expected goals for backward-compatible callers."""
+
+    print("\nExpected goals from CatBoostRegressor goal models:")
+    print(f"- {team_1}: {expected_goals_1:.4f}")
+    print(f"- {team_2}: {expected_goals_2:.4f}")
+
+
+def print_goal_ensemble(breakdown: ExpectedGoalsBreakdown, team_1: str, team_2: str) -> None:
+    """Print the full xG ensemble debug block."""
+
+    print("\nExpected goals ensemble:")
+    print("CatBoostRegressor xG:")
+    print(f"- {team_1}: {breakdown.catboost_xg_team_1:.4f}")
+    print(f"- {team_2}: {breakdown.catboost_xg_team_2:.4f}")
+    print("Statistical xG:")
+    print(f"- {team_1}: {breakdown.statistical_xg_team_1:.4f}")
+    print(f"- {team_2}: {breakdown.statistical_xg_team_2:.4f}")
+    print("Ensemble weights:")
+    print(f"- CatBoost: {breakdown.catboost_weight:.4f}")
+    print(f"- Statistical: {breakdown.statistical_weight:.4f}")
+    print("Final ensemble xG before goal scale:")
+    print(f"- {team_1}: {breakdown.ensemble_xg_team_1:.4f}")
+    print(f"- {team_2}: {breakdown.ensemble_xg_team_2:.4f}")
+    print("Goal-scale calibration:")
+    print(f"- Goal scale: {breakdown.goal_scale:.4f}")
+    print(f"- Calibrated {team_1} xG: {breakdown.calibrated_xg_team_1:.4f}")
+    print(f"- Calibrated {team_2} xG: {breakdown.calibrated_xg_team_2:.4f}")
 
 
 def build_explanation(
     fixture: FixtureMatch,
     feature_row: pd.DataFrame,
     probabilities: dict[str, float],
-    expected_goals_1: float,
-    expected_goals_2: float,
+    xg_breakdown: ExpectedGoalsBreakdown,
     best_candidate: pd.Series,
+    decision_mode: str,
 ) -> str:
     """Create a concise explanation for the final row."""
 
@@ -696,20 +888,51 @@ def build_explanation(
         "draw": "Draw",
         "team_2_win": display_team_2,
     }[winner_label]
+    fifa_text = (
+        "FIFA snapshot features were disabled by the training contract"
+        if pd.isna(row["fifa_points_diff"])
+        else f"FIFA points diff {row['fifa_points_diff']:.1f}"
+    )
+    decision_text = (
+        "highest calibrated Poisson score probability"
+        if decision_mode == "score_probability"
+        else "highest expected competition points"
+    )
     return (
-        f"{winner_text} selected because its candidate scoreline maximized expected competition points. "
+        f"{winner_text} selected because its candidate scoreline had the {decision_text}. "
         f"CatBoost outcome probabilities were {display_team_1} {probabilities['team_1_win']:.1%}, "
         f"draw {probabilities['draw']:.1%}, {display_team_2} {probabilities['team_2_win']:.1%}. "
-        f"Poisson expected goals were {display_team_1} {expected_goals_1:.2f} and "
-        f"{display_team_2} {expected_goals_2:.2f}. "
-        f"Elo diff {row['elo_diff']:.1f}, FIFA points diff {row['fifa_points_diff']:.1f}, "
+        f"CatBoost xG was {display_team_1} {xg_breakdown.catboost_xg_team_1:.2f} and "
+        f"{display_team_2} {xg_breakdown.catboost_xg_team_2:.2f}; statistical xG was "
+        f"{display_team_1} {xg_breakdown.statistical_xg_team_1:.2f} and "
+        f"{display_team_2} {xg_breakdown.statistical_xg_team_2:.2f}. "
+        f"Final ensemble xG was {display_team_1} {xg_breakdown.ensemble_xg_team_1:.2f} and "
+        f"{display_team_2} {xg_breakdown.ensemble_xg_team_2:.2f} "
+        f"using CatBoost weight {xg_breakdown.catboost_weight:.2f}; calibrated xG was "
+        f"{display_team_1} {xg_breakdown.calibrated_xg_team_1:.2f} and "
+        f"{display_team_2} {xg_breakdown.calibrated_xg_team_2:.2f} "
+        f"with goal scale {xg_breakdown.goal_scale:.2f}. "
+        f"Confidence represents predicted winner/outcome confidence: "
+        f"{winner_text} {probabilities[winner_label]:.1%}. "
+        f"Selected score probability represents exact-score confidence: "
+        f"{float(best_candidate['poisson_score_probability']):.1%}. "
+        f"Elo diff {row['elo_diff']:.1f}, {fifa_text}, "
         f"last-5 form points diff {row['form_points_diff_last_5']:.1f}, "
         f"last-10 opponent Elo diff {row['avg_opponent_elo_diff_last_10']:.1f}."
     )
 
 
-def predict_single_match(team_1: str, team_2: str, stage: str, match_date: str) -> PredictionResult:
+def predict_single_match(
+    team_1: str,
+    team_2: str,
+    stage: str,
+    match_date: str,
+    decision_mode: str = "expected_points",
+) -> PredictionResult:
     """Run the complete one-match prediction workflow."""
+
+    if decision_mode not in DECISION_MODES:
+        raise ValueError(f"Unsupported decision_mode `{decision_mode}`. Choose from {DECISION_MODES}.")
 
     fixtures = load_fixtures()
     elo = load_elo()
@@ -720,34 +943,61 @@ def predict_single_match(team_1: str, team_2: str, stage: str, match_date: str) 
     display_team_1 = display_team_name(fixture.team_1)
     display_team_2 = display_team_name(fixture.team_2)
 
-    print(f"Validated fixture: {display_team_1} vs {display_team_2}, {fixture.stage}, {fixture.match_date}")
+    print("\nNormalized team names:")
+    print(f"- team_1: {fixture.team_1}")
+    print(f"- team_2: {fixture.team_2}")
+    print(
+        "Fixture validation result: "
+        f"valid -> {display_team_1} vs {display_team_2}, {fixture.stage}, {fixture.match_date}"
+    )
+    print(
+        "Training feature contract: "
+        f"{len(model_feature_columns())} features, "
+        f"latest FIFA snapshot features enabled = {training_uses_latest_rating_features()}"
+    )
     print("Built feature row:")
-    print(feature_row[model_feature_columns()].to_string(index=False))
+    print(aligned_model_input(feature_row).to_string(index=False))
     print_form_features(fixture, feature_row)
 
-    outcome_model = load_outcome_model()
+    outcome_model, goals_team_1_model, goals_team_2_model = load_prediction_models()
     probabilities = predict_outcome_probabilities(outcome_model, feature_row)
-    expected_goals_1, expected_goals_2 = estimate_expected_goals(feature_row)
-    score_matrix = generate_score_matrix(expected_goals_1, expected_goals_2)
+    print_outcome_probabilities(probabilities, display_team_1, display_team_2)
+    ensemble_config = load_goal_ensemble_config()
+    score_selection_config = load_score_selection_config()
+    goal_scale = float(score_selection_config["goal_scale"])
+    xg_breakdown = predict_ensemble_expected_goals(
+        goals_team_1_model,
+        goals_team_2_model,
+        feature_row,
+        ensemble_config,
+        goal_scale=goal_scale,
+    )
+    print_goal_ensemble(xg_breakdown, display_team_1, display_team_2)
+    score_matrix = generate_score_matrix(xg_breakdown.calibrated_xg_team_1, xg_breakdown.calibrated_xg_team_2)
     candidates = generate_candidates(score_matrix, probabilities)
+    print_top_score_probabilities(candidates, limit=5)
     print_top_candidates(candidates, limit=5)
+    print(f"\nFinal decision mode: {decision_mode}")
 
-    best_candidate = candidates.iloc[0]
+    best_candidate = select_final_candidate(candidates, decision_mode)
     winner_label = best_candidate["winner_from_score"]
     predicted_winner = {
         "team_1_win": display_team_1,
         "draw": "Draw",
         "team_2_win": display_team_2,
     }[winner_label]
-    selected_winner_probability = probabilities[winner_label]
-    confidence = round(max(0.0, min(100.0, selected_winner_probability * 100.0)), 2)
+    selected_score_probability = float(best_candidate["poisson_score_probability"])
+    outcome_confidence = float(probabilities[winner_label])
+    exact_score_confidence = selected_score_probability
+    confidence_type = "outcome_probability"
+    confidence = round(max(0.0, min(100.0, outcome_confidence * 100.0)), 2)
     explanation = build_explanation(
         fixture,
         feature_row,
         probabilities,
-        expected_goals_1,
-        expected_goals_2,
+        xg_breakdown,
         best_candidate,
+        decision_mode,
     )
 
     prediction = PredictionResult(
@@ -759,11 +1009,28 @@ def predict_single_match(team_1: str, team_2: str, stage: str, match_date: str) 
         predicted_score=str(best_candidate["predicted_score"]),
         predicted_goal_difference=int(best_candidate["goal_difference"]),
         confidence=confidence,
+        outcome_confidence=round(outcome_confidence, 6),
+        exact_score_confidence=round(exact_score_confidence, 6),
+        confidence_type=confidence_type,
         team_1_win_probability=round(probabilities["team_1_win"], 4),
         draw_probability=round(probabilities["draw"], 4),
         team_2_win_probability=round(probabilities["team_2_win"], 4),
-        expected_goals_team_1=expected_goals_1,
-        expected_goals_team_2=expected_goals_2,
+        expected_goals_team_1=xg_breakdown.calibrated_xg_team_1,
+        expected_goals_team_2=xg_breakdown.calibrated_xg_team_2,
+        catboost_xg_team_1=xg_breakdown.catboost_xg_team_1,
+        catboost_xg_team_2=xg_breakdown.catboost_xg_team_2,
+        statistical_xg_team_1=xg_breakdown.statistical_xg_team_1,
+        statistical_xg_team_2=xg_breakdown.statistical_xg_team_2,
+        ensemble_xg_team_1=xg_breakdown.ensemble_xg_team_1,
+        ensemble_xg_team_2=xg_breakdown.ensemble_xg_team_2,
+        goal_ensemble_weight_catboost=xg_breakdown.catboost_weight,
+        goal_ensemble_weight_statistical=xg_breakdown.statistical_weight,
+        decision_mode=decision_mode,
+        goal_scale=xg_breakdown.goal_scale,
+        calibrated_xg_team_1=xg_breakdown.calibrated_xg_team_1,
+        calibrated_xg_team_2=xg_breakdown.calibrated_xg_team_2,
+        selected_score_probability=round(selected_score_probability, 6),
+        predicted_total_goals=int(best_candidate["goals_team_1"] + best_candidate["goals_team_2"]),
         expected_competition_points=round(float(best_candidate["expected_competition_points"]), 4),
         prediction_method=PREDICTION_METHOD,
         explanation=explanation,
@@ -780,15 +1047,21 @@ def save_prediction(prediction: PredictionResult, path: Path = PREDICTION_OUTPUT
     fieldnames = list(row.keys())
     if path.exists():
         with path.open("r", newline="", encoding="utf-8") as existing_file:
-            reader = csv.reader(existing_file)
-            existing_header = next(reader, [])
+            reader = csv.DictReader(existing_file)
+            existing_header = reader.fieldnames or []
+            existing_rows = list(reader)
         if existing_header and existing_header != fieldnames:
-            archive_dir = VERSION_DIR / "_archive"
-            archive_dir.mkdir(parents=True, exist_ok=True)
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            archived_path = archive_dir / f"version_2_predictions_legacy_{timestamp}.csv"
-            path.replace(archived_path)
-            print(f"Archived old prediction schema to: {archived_path}")
+            if not set(existing_header).issubset(set(fieldnames)):
+                raise ValueError(
+                    "Existing prediction CSV schema has unknown columns that cannot be migrated. "
+                    f"Expected {fieldnames}, found {existing_header}."
+                )
+            with path.open("w", newline="", encoding="utf-8") as migrated_file:
+                writer = csv.DictWriter(migrated_file, fieldnames=fieldnames)
+                writer.writeheader()
+                for existing_row in existing_rows:
+                    writer.writerow({field: existing_row.get(field, "") for field in fieldnames})
+            print(f"Migrated prediction CSV to the current prediction schema: {path}")
 
     write_header = not path.exists()
     with path.open("a", newline="", encoding="utf-8") as output_file:
@@ -802,10 +1075,31 @@ def parse_args() -> argparse.Namespace:
     """Parse command-line input."""
 
     parser = argparse.ArgumentParser(description="Predict one World Cup 2026 match with Version 2.")
-    parser.add_argument("--team_1", required=True, help="First team from the user perspective.")
-    parser.add_argument("--team_2", required=True, help="Second team from the user perspective.")
+    parser.add_argument(
+        "--team_1",
+        "--term_1",
+        dest="team_1",
+        required=True,
+        help="First team from the user perspective.",
+    )
+    parser.add_argument(
+        "--team_2",
+        "--term_2",
+        dest="team_2",
+        required=True,
+        help="Second team from the user perspective.",
+    )
     parser.add_argument("--stage", required=True, help="World Cup stage, for example 'Group Stage'.")
     parser.add_argument("--match_date", required=True, help="Match date in YYYY-MM-DD format.")
+    parser.add_argument(
+        "--decision_mode",
+        choices=DECISION_MODES,
+        default="expected_points",
+        help=(
+            "Final score selector. Default uses expected competition points, combining "
+            "outcome, goal-difference, and exact-score probabilities."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -814,7 +1108,13 @@ def main() -> None:
 
     args = parse_args()
     try:
-        prediction = predict_single_match(args.team_1, args.team_2, args.stage, args.match_date)
+        prediction = predict_single_match(
+            args.team_1,
+            args.team_2,
+            args.stage,
+            args.match_date,
+            decision_mode=args.decision_mode,
+        )
         save_prediction(prediction)
     except Exception as exc:
         print(f"Prediction failed: {exc}", file=sys.stderr)
@@ -825,7 +1125,9 @@ def main() -> None:
     print(f"Winner: {prediction.predicted_winner}")
     print(f"Score: {prediction.predicted_score}")
     print(f"Goal difference: {prediction.predicted_goal_difference}")
+    print(f"Decision mode: {prediction.decision_mode}")
     print(f"Confidence: {prediction.confidence:.2f}/100")
+    print(f"Selected score probability: {prediction.selected_score_probability:.2%}")
     print(f"Expected competition points: {prediction.expected_competition_points:.4f}")
     print(prediction.explanation)
 
