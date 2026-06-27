@@ -45,13 +45,7 @@ worldcup_prediction_project/
 - `data/processed/`: Shared processed datasets, including cleaned World Cup 2026 fixtures.
 - `data/live_updates/`: Latest Elo and FIFA ranking snapshots for future prediction runs.
 
-## Version 1 Baseline
-
-`version_1_baseline/` contains the baseline system. It remains clearly separated from the ML work.
-
-Important note: Version 1 also keeps local `data/`, `cleaned_data/`, and `processed_data/` folders because the existing scripts depend on those relative paths. This preserves current behavior without modifying model logic.
-
-## Version 2 Machine Learning
+## Machine Learning
 
 `core_prediction/` contains the ML workspace:
 
