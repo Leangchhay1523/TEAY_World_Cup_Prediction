@@ -4,54 +4,54 @@
 
 | Team                   | Group   | Status               | Eliminated in | Eliminated by         |
 | ---------------------- | ------- | -------------------- | ------------- | --------------------- |
-| Argentina              | Group J | 🟢 In (Group Stage)  |               |                       |
-| France                 | Group I | 🟢 In (Group Stage)  |               |                       |
-| Spain                  | Group H | 🟢 In (Group Stage)  |               |                       |
-| Brazil                 | Group C | 🟢 In (Group Stage)  |               |                       |
-| England                | Group L | 🟢 In (Group Stage)  |               |                       |
+| Argentina              | Group J | 🟢 In (Round 32)     |               |                       |
+| France                 | Group I | 🟢 In (Round 32)     |               |                       |
+| Spain                  | Group H | 🟢 In (Round 32)     |               |                       |
+| Brazil                 | Group C | 🟢 In (Round 32)     |               |                       |
+| England                | Group L | 🟢 In (Round 32)     |               |                       |
 | Germany                | Group E | 🟢 In (Round 32)     |               |                       |
-| Portugal               | Group K | 🟢 In (Group Stage)  |               |                       |
-| Netherlands            | Group F | 🟢 In (Group Stage)  |               |                       |
-| Belgium                | Group G | 🟢 In (Group Stage)  |               |                       |
-| Croatia                | Group L | 🟢 In (Group Stage)  |               |                       |
-| Uruguay                | Group H | 🟢 In (Group Stage)  |               |                       |
-| Colombia               | Group K | 🟢 In (Group Stage)  |               |                       |
+| Portugal               | Group K | 🟢 In (Round 32)     |               |                       |
+| Netherlands            | Group F | 🟢 In (Round 32)     |               |                       |
+| Belgium                | Group G | 🟢 In (Round 32)     |               |                       |
+| Croatia                | Group L | 🟢 In (Round 32)     |               |                       |
+| Uruguay                | Group H | 🟢 In (Round 32)     |               |                       |
+| Colombia               | Group K | 🟢 In (Round 32)     |               |                       |
 | USA                    | Group D | 🟢 In (Round 32)     |               |                       |
 | Mexico                 | Group A | 🟢 In (Round 32)     |               |                       |
-| Japan                  | Group F | 🟢 In (Group Stage)  |               |                       |
-| Morocco                | Group C | 🟢 In (Group Stage)  |               |                       |
-| South Africa           | Group A | 🟢 In (Group Stage)  |               |                       |
-| South Korea            | Group A | 🟢 In (Group Stage)  |               |                       |
-| Czechia                | Group A | 🟢 In (Group Stage)  |               |                       |
-| Canada                 | Group B | 🟢 In (Group Stage)  |               |                       |
-| Bosnia and Herzegovina | Group B | 🟢 In (Group Stage)  |               |                       |
-| Qatar                  | Group B | 🟢 In (Group Stage)  |               |                       |
-| Switzerland            | Group B | 🟢 In (Group Stage)  |               |                       |
-| Haiti                  | Group C | 🟢 In (Group Stage)  |               |                       |
-| Scotland               | Group C | 🟢 In (Group Stage)  |               |                       |
-| Australia              | Group D | 🟢 In (Group Stage)  |               |                       |
-| Paraguay               | Group D | 🟢 In (Group Stage)  |               |                       |
+| Japan                  | Group F | 🟢 In (Round 32)     |               |                       |
+| Morocco                | Group C | 🟢 In (Round 32)     |               |                       |
+| South Africa           | Group A | 🟢 In (Round 32)     |               |                       |
+| South Korea            | Group A | 🟢 In (Round 32)     |               |                       |
+| Czechia                | Group A | 🟢 In (Round 32)     |               |                       |
+| Canada                 | Group B | 🟢 In (Round 32)     |               |                       |
+| Bosnia and Herzegovina | Group B | 🟢 In (Round 32)     |               |                       |
+| Qatar                  | Group B | 🟢 In (Round 32)     |               |                       |
+| Switzerland            | Group B | 🟢 In (Round 32)     |               |                       |
+| Haiti                  | Group C | 🟢 In (Round 32)     |               |                       |
+| Scotland               | Group C | 🟢 In (Round 32)     |               |                       |
+| Australia              | Group D | 🟢 In (Round 32)     |               |                       |
+| Paraguay               | Group D | 🟢 In (Round 32)     |               |                       |
 | Türkiye                | Group D | 🔴 Out (Group Stage) | Group Stage   | N/A (Group Standings) |
-| Curaçao                | Group E | 🟢 In (Group Stage)  |               |                       |
-| Ivory Coast            | Group E | 🟢 In (Group Stage)  |               |                       |
-| Ecuador                | Group E | 🟢 In (Group Stage)  |               |                       |
-| Sweden                 | Group F | 🟢 In (Group Stage)  |               |                       |
+| Curaçao                | Group E | 🟢 In (Round 32)     |               |                       |
+| Ivory Coast            | Group E | 🟢 In (Round 32)     |               |                       |
+| Ecuador                | Group E | 🟢 In (Round 32)     |               |                       |
+| Sweden                 | Group F | 🟢 In (Round 32)     |               |                       |
 | Tunisia                | Group F | 🔴 Out (Group Stage) | Group Stage   | N/A (Group Standings) |
-| Egypt                  | Group G | 🟢 In (Group Stage)  |               |                       |
-| IR Iran                | Group G | 🟢 In (Group Stage)  |               |                       |
-| New Zealand            | Group G | 🟢 In (Group Stage)  |               |                       |
-| Cabo Verde             | Group H | 🟢 In (Group Stage)  |               |                       |
-| Saudi Arabia           | Group H | 🟢 In (Group Stage)  |               |                       |
-| Senegal                | Group I | 🟢 In (Group Stage)  |               |                       |
-| Iraq                   | Group I | 🟢 In (Group Stage)  |               |                       |
-| Norway                 | Group I | 🟢 In (Group Stage)  |               |                       |
-| Algeria                | Group J | 🟢 In (Group Stage)  |               |                       |
-| Austria                | Group J | 🟢 In (Group Stage)  |               |                       |
-| Jordan                 | Group J | 🟢 In (Group Stage)  |               |                       |
-| Congo DR               | Group K | 🟢 In (Group Stage)  |               |                       |
-| Uzbekistan             | Group K | 🟢 In (Group Stage)  |               |                       |
-| Ghana                  | Group L | 🟢 In (Group Stage)  |               |                       |
-| Panama                 | Group L | 🟢 In (Group Stage)  |               |                       |
+| Egypt                  | Group G | 🟢 In (Round 32)     |               |                       |
+| IR Iran                | Group G | 🟢 In (Round 32)     |               |                       |
+| New Zealand            | Group G | 🟢 In (Round 32)     |               |                       |
+| Cabo Verde             | Group H | 🟢 In (Round 32)     |               |                       |
+| Saudi Arabia           | Group H | 🟢 In (Round 32)     |               |                       |
+| Senegal                | Group I | 🟢 In (Round 32)     |               |                       |
+| Iraq                   | Group I | 🟢 In (Round 32)     |               |                       |
+| Norway                 | Group I | 🟢 In (Round 32)     |               |                       |
+| Algeria                | Group J | 🟢 In (Round 32)     |               |                       |
+| Austria                | Group J | 🟢 In (Round 32)     |               |                       |
+| Jordan                 | Group J | 🔴 Out (Group Stage) | Group Stage   | N/A (Group Standings) |
+| Congo DR               | Group K | 🟢 In (Round 32)     |               |                       |
+| Uzbekistan             | Group K | 🔴 Out (Group Stage) | Group Stage   | N/A (Group Standings) |
+| Ghana                  | Group L | 🔴 Out (Group Stage) | Group Stage   | N/A (Group Standings) |
+| Panama                 | Group L | 🔴 Out (Group Stage) | Group Stage   | N/A (Group Standings) |
 
 > Update status to 🔴 Eliminated once a team is out. Fill Eliminated in and Eliminated by columns.
 
