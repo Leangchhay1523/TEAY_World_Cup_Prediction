@@ -9,18 +9,18 @@
 | Spain                  | Group H | 🟢 In (Round 32)     |               |                       |
 | Brazil                 | Group C | 🟢 In (Round 32)     |               |                       |
 | England                | Group L | 🟢 In (Round 32)     |               |                       |
-| Germany                | Group E | 🟢 In (Round 32)     |               |                       |
+| Germany                | Group E | 🔴 Out (Knockout)    | Knockout      | Paraguay              |
 | Portugal               | Group K | 🟢 In (Round 32)     |               |                       |
-| Netherlands            | Group F | 🟢 In (Round 32)     |               |                       |
+| Netherlands            | Group F | 🔴 Out (Knockout)    | Knockout      | Morroco               |
 | Belgium                | Group G | 🟢 In (Round 32)     |               |                       |
 | Croatia                | Group L | 🟢 In (Round 32)     |               |                       |
 | Uruguay                | Group H | 🟢 In (Round 32)     |               |                       |
 | Colombia               | Group K | 🟢 In (Round 32)     |               |                       |
 | USA                    | Group D | 🟢 In (Round 32)     |               |                       |
 | Mexico                 | Group A | 🟢 In (Round 32)     |               |                       |
-| Japan                  | Group F | 🟢 In (Round 32)     |               |                       |
+| Japan                  | Group F | 🔴 Out (Knockout)    | Knockout      | Brazil                |
 | Morocco                | Group C | 🟢 In (Round 32)     |               |                       |
-| South Africa           | Group A | 🟢 In (Round 32)     |               |                       |
+| South Africa           | Group A | 🔴 Out (Knockout)    | Knockout      | Canada                |
 | South Korea            | Group A | 🟢 In (Round 32)     |               |                       |
 | Czechia                | Group A | 🟢 In (Round 32)     |               |                       |
 | Canada                 | Group B | 🟢 In (Round 32)     |               |                       |
