@@ -17,18 +17,18 @@
 | Mexico                 | Group A | 🟢 In (Round 32)     |               |                       |
 | Morocco                | Group C | 🟢 In (Round 32)     |               |                       |
 | Canada                 | Group B | 🟢 In (Round 16)     |               |                       |
-| Bosnia and Herzegovina | Group B | 🟢 In (Round 32)     |               |                       |
 | Switzerland            | Group B | 🟢 In (Round 32)     |               |                       |
 | Australia              | Group D | 🟢 In (Round 32)     |               |                       |
 | Paraguay               | Group D | 🟢 In (Round 16)     |               |                       |
-| Ecuador                | Group E | 🟢 In (Round 32)     |               |                       |
 | Egypt                  | Group G | 🟢 In (Round 32)     |               |                       |
 | Cabo Verde             | Group H | 🟢 In (Round 32)     |               |                       |
-| Senegal                | Group I | 🟢 In (Round 32)     |               |                       |
 | Norway                 | Group I | 🟢 In (Round 16)     |               |                       |
 | Algeria                | Group J | 🟢 In (Round 32)     |               |                       |
 | Austria                | Group J | 🟢 In (Round 32)     |               |                       |
-| Congo DR               | Group K | 🟢 In (Round 32)     |               |                       |
+| Ecuador                | Group E | 🔴 Out (Knockout)    | Knockout      | Mexico                |
+| Senegal                | Group I | 🔴 Out (Knockout)    | Knockout      | Belgium               |
+| Bosnia and Herzegovina | Group B | 🔴 Out (Knockout)    | Knockout      | USA                   |
+| Congo DR               | Group K | 🔴 Out (Knockout)    | Knockout      | England               |
 | Germany                | Group E | 🔴 Out (Knockout)    | Knockout      | Paraguay              |
 | Netherlands            | Group F | 🔴 Out (Knockout)    | Knockout      | Morroco               |
 | Uruguay                | Group H | 🔴 Out (Group Stage) | Group Stage   | N/A (Group Standings) |
